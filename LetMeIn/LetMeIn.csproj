@@ -10,7 +10,7 @@
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <AssemblyName>LetMeIn</AssemblyName>
     <RootNamespace>LetMeIn</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 

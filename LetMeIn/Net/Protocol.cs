@@ -71,19 +71,38 @@ public static class Protocol
     private static byte[] Canonical(Packet p) =>
         Encoding.UTF8.GetBytes(string.Join('\n', p.Type, p.Id, p.Name, p.Port, p.Text, p.Ts));
 
-    /// <summary>Активные IPv4-интерфейсы (без loopback) с адресом и маской.</summary>
-    public static IEnumerable<(IPAddress Address, IPAddress Mask)> LocalIPv4()
+    /// <summary>
+    /// Интерфейсы домашней сети: активные, не loopback/туннели, с приватным IPv4.
+    /// VPN-адаптеры обычно отсекаются по типу (Tunnel/Ppp) или по адресу (не из приватных диапазонов).
+    /// </summary>
+    public static IEnumerable<(IPAddress Address, IPAddress Mask)> LanInterfaces()
     {
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
-            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback
+                or NetworkInterfaceType.Tunnel or NetworkInterfaceType.Ppp) continue;
             foreach (var ua in ni.GetIPProperties().UnicastAddresses)
             {
-                if (ua.Address.AddressFamily == AddressFamily.InterNetwork && ua.IPv4Mask is not null)
+                if (ua.Address.AddressFamily == AddressFamily.InterNetwork && ua.IPv4Mask is not null
+                    && IsPrivate(ua.Address) && !IPAddress.IsLoopback(ua.Address))
                     yield return (ua.Address, ua.IPv4Mask);
             }
         }
+    }
+
+    /// <summary>
+    /// Наш адрес на интерфейсе, в подсети которого лежит remote. К нему привязываем сокет:
+    /// Windows (strong host model) отправит пакет именно через этот интерфейс, даже если
+    /// VPN перехватил маршрут к локальной подсети.
+    /// </summary>
+    public static IPAddress? LocalAddressFor(IPAddress remote)
+    {
+        if (remote.IsIPv4MappedToIPv6) remote = remote.MapToIPv4();
+        if (IPAddress.IsLoopback(remote)) return null;
+        foreach (var (addr, mask) in LanInterfaces())
+            if (SameSubnet(addr, remote, mask)) return addr;
+        return null;
     }
 
     public static IPAddress BroadcastOf(IPAddress addr, IPAddress mask)
@@ -107,21 +126,23 @@ public static class Protocol
             || (b[0] == 169 && b[1] == 254);
     }
 
-    /// <summary>Адрес из нашей локальной подсети (или loopback) и из приватного диапазона.</summary>
+    /// <summary>Адрес из подсети одного из наших LAN-интерфейсов (или loopback).</summary>
     public static bool IsLocalSubnet(IPAddress ip)
     {
         if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
         if (IPAddress.IsLoopback(ip)) return true;
         if (!IsPrivate(ip)) return false;
-        var r = ip.GetAddressBytes();
-        foreach (var (addr, mask) in LocalIPv4())
-        {
-            var a = addr.GetAddressBytes();
-            var m = mask.GetAddressBytes();
-            bool same = true;
-            for (int i = 0; i < 4 && same; i++) same = (a[i] & m[i]) == (r[i] & m[i]);
-            if (same) return true;
-        }
-        return false;
+        return LanInterfaces().Any(x => SameSubnet(x.Address, ip, x.Mask));
+    }
+
+    private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    {
+        if (b.AddressFamily != AddressFamily.InterNetwork) return false;
+        var x = a.GetAddressBytes();
+        var y = b.GetAddressBytes();
+        var m = mask.GetAddressBytes();
+        for (int i = 0; i < 4; i++)
+            if ((x[i] & m[i]) != (y[i] & m[i])) return false;
+        return true;
     }
 }

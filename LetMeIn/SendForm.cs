@@ -6,16 +6,23 @@ namespace LetMeIn;
 public sealed class SendForm : Form
 {
     public static readonly TimeSpan SendCooldown = TimeSpan.FromMinutes(1);
-    private static readonly string[] Templates = ["Можно зайти?", "Выйди на минутку", "Еда готова"];
-
-    private const string NoPeersHint = "Никого не найдено. Сеть «Частная»? Ключи совпадают?";
+    private const string NoPeersHint = "Никого не видно — проверь сеть и ключ";
 
     private readonly Settings _settings;
     private readonly Func<IReadOnlyList<Peer>> _getPeers;
     private readonly ComboBox _peers = new() { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-    private readonly TextBox _text = new() { Dock = DockStyle.Fill, MaxLength = Protocol.MaxTextLength };
-    private readonly Button _send = new() { Text = "Отправить", AutoSize = true, Anchor = AnchorStyles.Right };
-    private readonly Label _status = new() { AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = SystemColors.GrayText };
+    private readonly TextBox _text = new()
+    {
+        Dock = DockStyle.Fill, MaxLength = Protocol.MaxTextLength, PlaceholderText = "Сообщение…",
+    };
+    private readonly Button _send = new()
+    {
+        Text = "Отправить", AutoSize = true, MinimumSize = new Size(110, 0), Anchor = AnchorStyles.Left | AnchorStyles.Right,
+    };
+    private readonly Label _status = new()
+    {
+        AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = SystemColors.GrayText, Margin = new Padding(3, 4, 3, 0),
+    };
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 1000 };
     private bool _sending;
 
@@ -24,7 +31,7 @@ public sealed class SendForm : Form
         _settings = settings;
         _getPeers = getPeers;
 
-        Text = "LetMeIn — постучаться";
+        Text = "Постучаться";
         Icon = TrayContext.AppIcon;
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         ShowInTaskbar = false;
@@ -34,28 +41,21 @@ public sealed class SendForm : Form
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         KeyPreview = true;
-        Padding = new Padding(10);
+        Padding = new Padding(8);
         Font = new Font("Segoe UI", 10f);
 
-        var templates = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0) };
-        foreach (var t in Templates)
-        {
-            var b = new Button { Text = t, AutoSize = true, FlatStyle = FlatStyle.System };
-            b.Click += (_, _) => { _text.Text = t; _text.Focus(); _text.SelectAll(); };
-            templates.Controls.Add(b);
-        }
-
+        // [ Кому ▾                       ]
+        // [ Сообщение…        ][Отправить]
+        //   статус
         var table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300));
-        table.Controls.Add(new Label { Text = "Кому:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
-        table.Controls.Add(_peers, 1, 0);
-        table.Controls.Add(new Label { Text = "Текст:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
-        table.Controls.Add(_text, 1, 1);
-        table.Controls.Add(templates, 0, 2);
-        table.SetColumnSpan(templates, 2);
-        table.Controls.Add(_status, 0, 3);
-        table.Controls.Add(_send, 1, 3);
+        table.Controls.Add(_peers, 0, 0);
+        table.SetColumnSpan(_peers, 2);
+        table.Controls.Add(_text, 0, 1);
+        table.Controls.Add(_send, 1, 1);
+        table.Controls.Add(_status, 0, 2);
+        table.SetColumnSpan(_status, 2);
         Controls.Add(table);
 
         AcceptButton = _send;

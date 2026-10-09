@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
@@ -27,6 +28,9 @@ public static class MessageClient
         try
         {
             using var client = new TcpClient(peer.Address.AddressFamily);
+            // Исходящий адрес — наш интерфейс в подсети соседа, чтобы обойти маршруты VPN.
+            if (Protocol.LocalAddressFor(peer.Address) is { } local)
+                client.Client.Bind(new IPEndPoint(local, 0));
             await client.ConnectAsync(peer.Address, peer.Port, cts.Token);
             var stream = client.GetStream();
             await LineIO.WriteLineAsync(stream, data, cts.Token);

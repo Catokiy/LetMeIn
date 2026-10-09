@@ -29,10 +29,14 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autostartItem);
         menu.Items.Add("Настройки…", null, (_, _) => EditSettings(firstRun: false));
+        menu.Items.Add("Проверить обновления…", null, async (_, _) => await CheckUpdatesAsync());
         menu.Items.Add("Тестовое уведомление", null, (_, _) => Notifier.ShowKnock(_settings.Name, "Это тест — так будет выглядеть стук."));
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Перезапустить", null, (_, _) => Restart());
         menu.Items.Add("Удалить LetMeIn…", null, (_, _) => UninstallApp());
         menu.Items.Add("Выход", null, (_, _) => ExitThread());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem($"LetMeIn {Updater.CurrentVersionText}") { Enabled = false });
         menu.Opening += (_, _) => _autostartItem.Checked = Autostart.IsEnabled;
 
         _tray = new NotifyIcon
@@ -73,6 +77,51 @@ public sealed class TrayContext : ApplicationContext
     public void ShowSendFormFromAnyThread() => _ui.Post(_ => ShowSendForm(), null);
 
     public void ExitFromAnyThread() => _ui.Post(_ => ExitThread(), null);
+
+    private void Restart()
+    {
+        // Новый экземпляр дождётся, пока этот закроется и отпустит порты.
+        var args = $"{Program.WaitPidArg} {Environment.ProcessId}" + (_debugLoopback ? " --debug-loopback" : "");
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, args)
+        {
+            UseShellExecute = false,
+        });
+        ExitThread();
+    }
+
+    private bool _checkingUpdates;
+
+    private async Task CheckUpdatesAsync()
+    {
+        if (_checkingUpdates) return;
+        _checkingUpdates = true;
+        try
+        {
+            ReleaseInfo? release;
+            try { release = await Updater.CheckAsync(); }
+            catch (Exception e)
+            {
+                MessageBox.Show($"Не удалось проверить обновления:\n{e.Message}", "LetMeIn",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (release is null)
+            {
+                MessageBox.Show($"У тебя последняя версия ({Updater.CurrentVersionText}).", "LetMeIn",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var form = new UpdateForm(release);
+            if (form.ShowDialog() == DialogResult.OK)
+                ExitThread(); // Новый exe уже запущен и сам заменит этот.
+        }
+        finally
+        {
+            _checkingUpdates = false;
+        }
+    }
 
     private void UninstallApp()
     {

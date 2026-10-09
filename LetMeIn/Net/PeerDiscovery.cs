@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 
 namespace LetMeIn.Net;
@@ -51,7 +52,11 @@ public sealed class PeerDiscovery : IDisposable
     {
         _ = Task.Run(ReceiveLoop);
         _ = Task.Run(AnnounceLoop);
+        NetworkChange.NetworkAddressChanged += OnNetworkChanged;
     }
+
+    // Подключился/отключился VPN, сменился Wi-Fi — анонсируемся сразу, не ждём 5 сек.
+    private void OnNetworkChanged(object? sender, EventArgs e) => _ = Task.Run(Broadcast);
 
     private async Task AnnounceLoop()
     {
@@ -77,20 +82,36 @@ public sealed class PeerDiscovery : IDisposable
         Port = _settings.MessagePort,
     }, _key);
 
+    /// <summary>
+    /// Шлём анонс отдельно через каждый LAN-интерфейс с сокета, привязанного к его адресу:
+    /// так пакет гарантированно уходит в домашнюю сеть, а не в VPN-туннель.
+    /// </summary>
     private async Task Broadcast()
     {
+        if (_cts.IsCancellationRequested) return;
         var data = HelloBytes();
-        var targets = Protocol.LocalIPv4()
-            .Where(x => Protocol.IsPrivate(x.Address))
-            .Select(x => Protocol.BroadcastOf(x.Address, x.Mask))
-            .Append(IPAddress.Broadcast)
-            .Distinct();
-
-        foreach (var target in targets)
+        foreach (var (addr, mask) in Protocol.LanInterfaces().ToList())
         {
-            try { await _udp.SendAsync(data, new IPEndPoint(target, _settings.DiscoveryPort)); }
-            catch (SocketException) { /* интерфейс мог пропасть — не страшно */ }
-            catch (ObjectDisposedException) { return; }
+            var targets = new[] { Protocol.BroadcastOf(addr, mask), IPAddress.Broadcast };
+            foreach (var target in targets)
+                await SendFrom(addr, data, target);
+        }
+    }
+
+    private async Task SendFrom(IPAddress? local, byte[] data, IPAddress target)
+    {
+        try
+        {
+            using var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+            {
+                EnableBroadcast = true,
+            };
+            s.Bind(new IPEndPoint(local ?? IPAddress.Any, 0));
+            await s.SendToAsync(data, new IPEndPoint(target, _settings.DiscoveryPort), _cts.Token);
+        }
+        catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            // Интерфейс мог пропасть между перечислением и отправкой — не страшно.
         }
     }
 
@@ -113,17 +134,15 @@ public sealed class PeerDiscovery : IDisposable
                 : res.RemoteEndPoint.Address;
             var peer = new Peer(p.Id, p.Name, addr, p.Port, DateTime.UtcNow);
 
-            bool isNewOrChanged = !_peers.TryGetValue(p.Id, out var old)
-                                  || old.Name != peer.Name || !old.Address.Equals(peer.Address);
+            bool isNew = !_peers.TryGetValue(p.Id, out var old);
+            bool changed = isNew || old!.Name != peer.Name || !old.Address.Equals(peer.Address);
             _peers[p.Id] = peer;
 
-            if (isNewOrChanged)
-            {
-                // Отвечаем напрямую, чтобы новый сосед увидел нас сразу, а не через 5 сек.
-                try { await _udp.SendAsync(HelloBytes(), new IPEndPoint(addr, _settings.DiscoveryPort)); }
-                catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
+            // Отвечаем напрямую, чтобы новый сосед увидел нас сразу, а не через 5 сек.
+            if (isNew)
+                await SendFrom(Protocol.LocalAddressFor(addr), HelloBytes(), addr);
+            if (changed)
                 PeersChanged?.Invoke();
-            }
         }
     }
 
@@ -140,6 +159,7 @@ public sealed class PeerDiscovery : IDisposable
 
     public void Dispose()
     {
+        NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         _cts.Cancel();
         _udp.Dispose();
     }

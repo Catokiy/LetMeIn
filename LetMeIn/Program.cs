@@ -5,6 +5,7 @@ internal static class Program
     private const string MutexName = @"Local\LetMeIn-SingleInstance";
     private const string ShowEventName = @"Local\LetMeIn-ShowSendForm";
     private const string ExitEventName = @"Local\LetMeIn-Exit";
+    public const string WaitPidArg = "--wait-pid";
 
     [STAThread]
     private static void Main(string[] args)
@@ -37,6 +38,18 @@ internal static class Program
             return;
         }
 
+        // Перезапуск: ждём, пока старый экземпляр закроется.
+        int waitIdx = Array.IndexOf(args, WaitPidArg);
+        if (waitIdx >= 0 && waitIdx + 1 < args.Length && int.TryParse(args[waitIdx + 1], out var oldPid))
+        {
+            try
+            {
+                using var old = System.Diagnostics.Process.GetProcessById(oldPid);
+                old.WaitForExit(10_000);
+            }
+            catch (ArgumentException) { /* уже закрылся */ }
+        }
+
         using var mutex = new Mutex(true, MutexName, out bool isFirst);
         if (!isFirst)
         {
@@ -51,6 +64,7 @@ internal static class Program
         }
 
         bool debugLoopback = args.Contains("--debug-loopback");
+        Updater.CleanupTemp();
         var settings = Settings.Load();
         var context = new TrayContext(settings, debugLoopback);
 

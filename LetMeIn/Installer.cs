@@ -43,16 +43,18 @@ public static class Installer
             RunElevated(SetupFirewallArg);
 
         Autostart.Set(true, InstalledExe);
+        ShellIntegration.Register(InstalledExe);
         Process.Start(new ProcessStartInfo(InstalledExe) { UseShellExecute = true });
 
         if (wasInstalled)
-            Notifier.ShowInfo("LetMeIn обновлён", "Программа в трее, всё работает как раньше.");
+            Notifier.ShowInfo($"LetMeIn обновлён до {Updater.CurrentVersionText}", "Настройки сохранены, программа в трее.");
     }
 
     /// <summary>Удалить: автозапуск, фаервол, папку с exe (после выхода). Настройки остаются.</summary>
     public static void Uninstall()
     {
         Autostart.Set(false);
+        ShellIntegration.Unregister(InstalledExe);
         RunElevated(RemoveFirewallArg);
         Process.Start(new ProcessStartInfo("cmd.exe",
             $"/c timeout /t 2 /nobreak >nul & rmdir /s /q \"{InstallDir}\"")
